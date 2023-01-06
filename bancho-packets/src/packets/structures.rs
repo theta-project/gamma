@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub struct BanchoMessage {
     pub sending_client: String,
     pub message: String,
@@ -10,17 +11,19 @@ pub struct BanchoChannel {
     pub topic: String,
     pub connected: i16,
 }
-
+#[derive(Clone)]
 pub struct BanchoPresence {
     pub player_id: i32,
     pub username: String,
     pub timezone: u8,
     pub country_code: u8,
+    pub play_mode: u8,
     pub permissions: u8,
     pub longitude: f32,
     pub latitude: f32,
     pub player_rank: i32,
 }
+#[derive(Debug)]
 pub struct ClientStatus {
     pub status: u8,
     pub status_text: String,

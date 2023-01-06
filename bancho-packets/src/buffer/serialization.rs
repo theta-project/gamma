@@ -130,7 +130,7 @@ impl BytesMutExt for BytesMut {
 
             self.advance(length);
         }
-        string.retain(|x| x != '\0');
+        string.retain(|x| x != '\0' && x != '\u{b}');
         string
     }
 

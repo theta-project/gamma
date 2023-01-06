@@ -98,6 +98,19 @@ pub fn bancho_protocol_negotiaton(buf: &mut Buffer, version: i32) {
     })
 }
 
+pub fn bancho_user_presence(buf: &mut Buffer, presence: structures::BanchoPresence) {
+    buf.with_header(PacketIDs::BanchoUserPresence as i16, |buf| {
+        buf.put_i32_le(presence.player_id);
+        buf.put_string(&presence.username);
+        buf.put_u8(presence.timezone);
+        buf.put_u8(presence.country_code);
+        buf.put_u8(presence.play_mode);
+        buf.put_f32_le(presence.longitude);
+        buf.put_f32_le(presence.latitude);
+        buf.put_i32_le(presence.player_rank);
+    })
+}
+
 pub fn bancho_channel_listing_complete(buf: &mut Buffer) {
     buf.with_header(PacketIDs::BanchoChannelListingComplete as i16, |buf| {
         buf.put_i32_le(0);
