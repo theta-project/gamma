@@ -1,0 +1,17 @@
+[package]
+name = "gamma"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[workspace]
+members = [".", "bancho-packets"]
+
+[dependencies]
+bancho-packets = { version = "0.2.0", path="bancho-packets"}
+actix-web = "4"
+log = "0.4.17"
+uuid = { version = "1.1.2", features = ["v4", "fast-rng", "macro-diagnostics"] }
+env_logger = "0.10.0"
+redis = "0.22.1"
