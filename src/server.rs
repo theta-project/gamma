@@ -3,7 +3,7 @@ use actix_web::{
     web::{Buf, Bytes, BytesMut, Payload, Data},
     Error, HttpRequest, HttpResponse, HttpResponseBuilder, Responder,
 };
-use bancho_packets::{
+use bancho_packet::{
     buffer::serialization::BytesMutExt,
     packets::{
         reader::{self, *},
