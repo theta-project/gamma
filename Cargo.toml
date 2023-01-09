@@ -15,7 +15,7 @@ actix-web = "4"
 uuid = { version = "1.1.2", features = ["v4", "fast-rng", "macro-diagnostics"] }
 redis = { version = "0.22.1", features = ["aio", "tokio-comp", "connection-manager"] }
 lazy_static = "1.4.0"
-mysql = "23.0.1"
+sqlx = { version = "0.6", features = ["runtime-tokio-native-tls", "mysql"] }
 dotenv = "0.15.0"
 tracing = "0.1.37"
 tracing-actix-web = "0.7.2"
