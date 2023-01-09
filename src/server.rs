@@ -14,7 +14,7 @@ use bancho_packet::{
     },
 };
 use redis::AsyncCommands;
-use tracing::{debug, instrument};
+use tracing::{debug, info_span, instrument, Instrument};
 use uuid::Uuid;
 
 use crate::db::Databases;
@@ -119,6 +119,7 @@ async fn handle_auth_packet(
             format!("gamma::buffers::{}", uuid.to_string()),
             BytesMut::new().to_vec(),
         )
+        .instrument(info_span!("add_session_buffer", uuid = uuid.to_string()))
         .await
         .unwrap();
 
@@ -136,6 +137,7 @@ async fn handle_regular_packet(
     let buffer: Vec<u8> = data
         .redis()
         .get(format!("gamma::buffers::{}", token))
+        .instrument(info_span!("get_session_buffer", token = token))
         .await
         .unwrap();
 
@@ -184,6 +186,7 @@ async fn handle_regular_packet(
             format!("gamma::buffers::{}", token),
             BytesMut::new().to_vec(),
         )
+        .instrument(info_span!("flush_player_buffer", token = token))
         .await
         .unwrap();
     Ok(res.body(player_buffer))
