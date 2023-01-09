@@ -8,9 +8,13 @@ use tracing::Level;
 pub struct Settings {
     pub db: DatabaseSettings,
 
+    /// The ip address to bind to, defaults to `127.0.0.1`
+    /// Environment Variable: `APP__IP`
     #[serde(default = "default_ip")]
     pub ip: String,
 
+    /// The port bind to, defaults to `8080`
+    /// Environment Variable: `APP__PORT`
     #[serde(default = "default_port")]
     pub port: u16,
 
@@ -49,7 +53,7 @@ impl Settings {
     pub fn new() -> Result<Self, ConfigError> {
         Config::builder()
             .add_source(File::with_name("gamma.toml").required(false))
-            .add_source(Environment::with_prefix("APP"))
+            .add_source(Environment::with_prefix("APP").separator("__"))
             .build()?
             .try_deserialize()
     }
