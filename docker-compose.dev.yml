@@ -1,0 +1,15 @@
+version: '2'
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+    - 6379:6379
+  mysql:
+    image: mariadb:10
+    ports:
+    - 3306:3306
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: gamma
+      MARIADB_USER: gamma
+      MARIADB_PASSWORD: 1234
