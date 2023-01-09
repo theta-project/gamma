@@ -31,8 +31,11 @@
           inherit buildInputs;
         };
 
-        docker = pkgs.dockerTools.buildImage {
+        docker = pkgs.dockerTools.buildLayeredImage {
           name = "gamma";
+          tag = "latest";
+          created = "now";
+
           config = {
             Cmd = "${gamma}/bin/gamma";
           };
