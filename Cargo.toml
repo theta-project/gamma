@@ -13,7 +13,7 @@ members = [".", "bancho-packet"]
 bancho-packet = { version = "0.2.0", path="bancho-packet"}
 actix-web = "4"
 uuid = { version = "1.1.2", features = ["v4", "fast-rng", "macro-diagnostics"] }
-redis = "0.22.1"
+redis = { version = "0.22.1", features = ["aio", "tokio-comp", "connection-manager"] }
 lazy_static = "1.4.0"
 mysql = "23.0.1"
 dotenv = "0.15.0"

@@ -2,19 +2,19 @@ use std::sync::Arc;
 
 use actix_web::{
     get, post,
-    web::{Buf, Bytes, BytesMut, Data, Payload},
-    Error, HttpRequest, HttpResponse, HttpResponseBuilder, Responder,
+    web::{Buf, Bytes, BytesMut, Data},
+    Error, HttpRequest, HttpResponse, Responder,
 };
 use bancho_packet::{
     buffer::serialization::BytesMutExt,
     packets::{
         reader::{self, *},
-        structures::{self, *},
+        structures::*,
         writer::*,
     },
 };
-use redis::Commands;
-use tracing::{debug, error, instrument};
+use redis::AsyncCommands;
+use tracing::{debug, instrument};
 use uuid::Uuid;
 
 use crate::db::Databases;
@@ -64,13 +64,13 @@ pub async fn bancho_server(
     data: Data<Arc<Databases>>,
 ) -> Result<HttpResponse, Error> {
     match req.headers().get("osu-token") {
-        Some(token) => handle_regular_packet(&req, token.to_str().unwrap(), body, &data),
-        None => handle_auth_packet(&req, body, &data),
+        Some(token) => handle_regular_packet(&req, token.to_str().unwrap(), body, &data).await,
+        None => handle_auth_packet(&req, body, &data).await,
     }
 }
 
 #[instrument(skip(body, data))]
-fn handle_auth_packet(
+async fn handle_auth_packet(
     req: &HttpRequest,
     mut body: Bytes,
     data: &Databases,
@@ -113,28 +113,30 @@ fn handle_auth_packet(
 
     res.append_header(("cho-token", uuid.to_string()));
 
-    let mut redis_conn = data.redis.get_connection().unwrap();
-    let _: () = redis_conn
+    let _: () = data
+        .redis()
         .set(
             format!("gamma::buffers::{}", uuid.to_string()),
             BytesMut::new().to_vec(),
         )
+        .await
         .unwrap();
 
     Ok(res.body(buffer))
 }
 
 #[instrument(skip(body, data))]
-fn handle_regular_packet(
+async fn handle_regular_packet(
     _req: &HttpRequest,
     token: &str,
     body: Bytes,
     data: &Databases,
 ) -> Result<HttpResponse, Error> {
     let mut res = HttpResponse::Ok();
-    let mut redis_conn = data.redis.clone().get_connection().unwrap();
-    let buffer: Vec<u8> = redis_conn
+    let buffer: Vec<u8> = data
+        .redis()
         .get(format!("gamma::buffers::{}", token))
+        .await
         .unwrap();
 
     // get the players buffer
@@ -176,11 +178,13 @@ fn handle_regular_packet(
     }
 
     // flush the buffer
-    let _: () = redis_conn
+    let _: () = data
+        .redis()
         .set(
             format!("gamma::buffers::{}", token),
             BytesMut::new().to_vec(),
         )
+        .await
         .unwrap();
     Ok(res.body(player_buffer))
 }

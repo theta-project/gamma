@@ -23,7 +23,7 @@ async fn main() -> std::io::Result<()> {
     info!("theta! Gamma Server. Ctrl+C to exit");
 
     let settings = Arc::new(Settings::new().unwrap());
-    let databases = Arc::new(Databases::new(&settings.db));
+    let databases = Arc::new(Databases::new(&settings.db).await);
     let bind_info = (settings.ip.clone(), settings.port);
 
     HttpServer::new(move || {
