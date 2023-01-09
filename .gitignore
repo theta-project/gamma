@@ -2,3 +2,4 @@
 .env
 .envrc
 .direnv
+gamma.toml

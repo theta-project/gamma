@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use actix_web::{
     get, post,
     web::{Buf, Bytes, BytesMut, Data, Payload},
@@ -14,6 +16,8 @@ use bancho_packet::{
 use redis::Commands;
 use tracing::{debug, error, instrument};
 use uuid::Uuid;
+
+use crate::db::Databases;
 extern crate lazy_static;
 
 lazy_static::lazy_static! {
@@ -57,11 +61,11 @@ pub async fn index() -> impl Responder {
 pub async fn bancho_server(
     req: HttpRequest,
     body: Bytes,
-    data: Data<crate::Databases>,
+    data: Data<Arc<Databases>>,
 ) -> Result<HttpResponse, Error> {
     match req.headers().get("osu-token") {
-        Some(token) => handle_regular_packet(&req, token.to_str().unwrap(), body, data).await,
-        None => handle_auth_packet(&req, body, data),
+        Some(token) => handle_regular_packet(&req, token.to_str().unwrap(), body, &data),
+        None => handle_auth_packet(&req, body, &data),
     }
 }
 
@@ -69,7 +73,7 @@ pub async fn bancho_server(
 fn handle_auth_packet(
     req: &HttpRequest,
     mut body: Bytes,
-    data: Data<crate::Databases>,
+    data: &Databases,
 ) -> Result<HttpResponse, Error> {
     let login = LoginData::from_slice(&mut body)
         .map_err(|_| actix_web::error::PayloadError::EncodingCorrupted);
@@ -121,11 +125,11 @@ fn handle_auth_packet(
 }
 
 #[instrument(skip(body, data))]
-async fn handle_regular_packet(
+fn handle_regular_packet(
     _req: &HttpRequest,
     token: &str,
     body: Bytes,
-    data: Data<crate::Databases>,
+    data: &Databases,
 ) -> Result<HttpResponse, Error> {
     let mut res = HttpResponse::Ok();
     let mut redis_conn = data.redis.clone().get_connection().unwrap();
