@@ -1,6 +1,7 @@
 use crate::buffer::serialization::{Buffer, BytesExt, BytesMutExt};
 use crate::packets::structures;
 use bytes::{Buf, Bytes, BytesMut};
+use tracing::instrument;
 
 // TODO: Use `thiserror`  cos macros are fun
 #[derive(Debug)]
@@ -25,6 +26,7 @@ pub struct LoginData {
 }
 
 impl LoginData {
+    #[instrument(name = "deserialise_login_data")]
     pub fn from_slice(buf: &mut Bytes) -> Result<Self, ParseError> {
         let username = String::from_utf8(buf.take_while(|b| b != b'\n').to_vec())
             .map_err(|_| ParseError::BadUTF8)?;

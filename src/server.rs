@@ -1,6 +1,6 @@
 use actix_web::{
     get, post,
-    web::{Buf, Bytes, BytesMut, Payload, Data},
+    web::{Buf, Bytes, BytesMut, Data, Payload},
     Error, HttpRequest, HttpResponse, HttpResponseBuilder, Responder,
 };
 use bancho_packet::{
@@ -11,8 +11,8 @@ use bancho_packet::{
         writer::*,
     },
 };
-use log::debug;
 use redis::Commands;
+use tracing::{debug, error, instrument};
 use uuid::Uuid;
 extern crate lazy_static;
 
@@ -28,7 +28,7 @@ lazy_static::lazy_static! {
         latitude: 0.,
         player_rank: 0
     };
-    
+
     static ref BOT_STATS: BanchoStats = BanchoStats {
         player_id: 3,
         status: ClientStatus {
@@ -48,22 +48,29 @@ lazy_static::lazy_static! {
     };
 }
 
-
-
 #[get("/")]
 pub async fn index() -> impl Responder {
     "theta! Gamma Server\n"
 }
 
 #[post("/")]
-pub async fn bancho_server(req: HttpRequest, body: Bytes, data: Data<crate::Databases>) -> Result<HttpResponse, Error> {
+pub async fn bancho_server(
+    req: HttpRequest,
+    body: Bytes,
+    data: Data<crate::Databases>,
+) -> Result<HttpResponse, Error> {
     match req.headers().get("osu-token") {
-        Some(token) => handle_packets(req.clone(), token.to_str().unwrap(), body, data).await,
-        None => do_auth(req, body, data),
+        Some(token) => handle_regular_packet(&req, token.to_str().unwrap(), body, data).await,
+        None => handle_auth_packet(&req, body, data),
     }
 }
 
-fn do_auth(req: HttpRequest, mut body: Bytes, data: Data<crate::Databases>) -> Result<HttpResponse, Error> {
+#[instrument(skip(body, data))]
+fn handle_auth_packet(
+    req: &HttpRequest,
+    mut body: Bytes,
+    data: Data<crate::Databases>,
+) -> Result<HttpResponse, Error> {
     let login = LoginData::from_slice(&mut body)
         .map_err(|_| actix_web::error::PayloadError::EncodingCorrupted);
 
@@ -102,21 +109,29 @@ fn do_auth(req: HttpRequest, mut body: Bytes, data: Data<crate::Databases>) -> R
 
     res.append_header(("cho-token", uuid.to_string()));
 
-    let mut redis_conn = data.redis.clone().get_connection().unwrap();
-    let _ : () = redis_conn.set(format!("gamma::buffers::{}", uuid.to_string()), BytesMut::new().to_vec()).unwrap();
+    let mut redis_conn = data.redis.get_connection().unwrap();
+    let _: () = redis_conn
+        .set(
+            format!("gamma::buffers::{}", uuid.to_string()),
+            BytesMut::new().to_vec(),
+        )
+        .unwrap();
 
     Ok(res.body(buffer))
 }
 
-async fn handle_packets(
-    req: HttpRequest,
+#[instrument(skip(body, data))]
+async fn handle_regular_packet(
+    _req: &HttpRequest,
     token: &str,
     body: Bytes,
-    data: Data<crate::Databases>
+    data: Data<crate::Databases>,
 ) -> Result<HttpResponse, Error> {
     let mut res = HttpResponse::Ok();
     let mut redis_conn = data.redis.clone().get_connection().unwrap();
-    let buffer: Vec<u8> = redis_conn.get(format!("gamma::buffers::{}", token)).unwrap();
+    let buffer: Vec<u8> = redis_conn
+        .get(format!("gamma::buffers::{}", token))
+        .unwrap();
 
     // get the players buffer
     let mut player_buffer = BytesMut::from(buffer.as_slice());
@@ -157,6 +172,11 @@ async fn handle_packets(
     }
 
     // flush the buffer
-    let _ : () = redis_conn.set(format!("gamma::buffers::{}", token), BytesMut::new().to_vec()).unwrap();
+    let _: () = redis_conn
+        .set(
+            format!("gamma::buffers::{}", token),
+            BytesMut::new().to_vec(),
+        )
+        .unwrap();
     Ok(res.body(player_buffer))
 }

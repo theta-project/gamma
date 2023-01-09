@@ -2,6 +2,7 @@
 name = "gamma"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -11,10 +12,13 @@ members = [".", "bancho-packet"]
 [dependencies]
 bancho-packet = { version = "0.2.0", path="bancho-packet"}
 actix-web = "4"
-log = "0.4.17"
 uuid = { version = "1.1.2", features = ["v4", "fast-rng", "macro-diagnostics"] }
-env_logger = "0.10.0"
 redis = "0.22.1"
 lazy_static = "1.4.0"
 mysql = "23.0.1"
 dotenv = "0.15.0"
+tracing = "0.1.37"
+tracing-actix-web = "0.7.2"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+tracing-tree = "0.2.2"
+tracing-log = "0.1.3"
