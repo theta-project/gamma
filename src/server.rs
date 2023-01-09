@@ -116,7 +116,7 @@ async fn handle_auth_packet(
     let _: () = data
         .redis()
         .set(
-            format!("gamma::buffers::{}", uuid.to_string()),
+            format!("gamma::buffers::{}", uuid),
             BytesMut::new().to_vec(),
         )
         .instrument(info_span!("add_session_buffer", uuid = uuid.to_string()))

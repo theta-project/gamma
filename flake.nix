@@ -61,6 +61,7 @@
 
           nativeBuildInputs = with pkgs; buildInputs ++ [
             cargo
+            clippy
             rustc
             rust-analyzer
             rustfmt

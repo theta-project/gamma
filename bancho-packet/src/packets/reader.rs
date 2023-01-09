@@ -1,6 +1,6 @@
 use crate::buffer::serialization::{Buffer, BytesExt, BytesMutExt};
 use crate::packets::structures;
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, Bytes};
 use tracing::instrument;
 
 // TODO: Use `thiserror`  cos macros are fun
@@ -62,7 +62,7 @@ impl LoginData {
             .unwrap();
         buf.advance(1);
 
-        let mut hashes_split = client_hashes.split(":").into_iter();
+        let mut hashes_split = client_hashes.split(':');
 
         let path_md5 = hashes_split.next().unwrap().to_string();
 

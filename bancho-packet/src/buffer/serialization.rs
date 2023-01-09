@@ -1,29 +1,18 @@
-use bytes::{BufMut, BytesMut, Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 pub trait BytesMutExt {
     fn put_header(&mut self, id: i16);
     fn fix_header(&mut self, start: usize);
-    fn len(&self) -> usize;
-    
+
     fn put_bool(&mut self, val: bool);
     fn put_uleb(&mut self, len: usize);
     fn put_string(&mut self, string: &str);
-    
+
     fn get_bool(&mut self) -> bool;
     fn get_uleb(&mut self) -> usize;
     fn get_string(&mut self) -> String;
 
-    fn with_header(&mut self, id: i16, f: impl FnOnce(&mut Self) -> ()) {
-        // record start and put header
-        let start = self.len();
-        self.put_header(id);
-        
-        // run caller provided code
-        f(self);
-        
-        // cleanup
-        self.fix_header(start);
-    }
+    fn with_header(&mut self, id: i16, f: impl FnOnce(&mut Self));
 }
 
 pub trait BytesExt {
@@ -31,10 +20,6 @@ pub trait BytesExt {
 }
 
 impl BytesMutExt for BytesMut {
-    fn len(&self) -> usize {
-        BytesMut::len(self) // call BytesMut.len() not BytesMutExt.len()
-    }
-
     fn put_header(&mut self, id: i16) {
         self.put_i16_le(id);
         self.put_bool(false);
@@ -72,7 +57,7 @@ impl BytesMutExt for BytesMut {
     }
     fn put_string(&mut self, string: &str) {
         let length = string.len();
- 
+
         self.put_u8(0xb);
         self.put_uleb(length);
         self.put(string.as_bytes());
@@ -134,11 +119,21 @@ impl BytesMutExt for BytesMut {
         string
     }
 
-    
+    fn with_header(&mut self, id: i16, f: impl FnOnce(&mut Self)) {
+        // record start and put header
+        let start = self.len();
+        self.put_header(id);
+
+        // run caller provided code
+        f(self);
+
+        // cleanup
+        self.fix_header(start);
+    }
 }
 
 impl BytesExt for Bytes {
-// TODO: This doesnt need to copy, could just slice into the buf
+    // TODO: This doesnt need to copy, could just slice into the buf
     fn take_while(&mut self, mut f: impl FnMut(u8) -> bool) -> Bytes {
         let mut len = 0;
         while let Some(b) = self.get(len) {
