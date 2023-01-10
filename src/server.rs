@@ -14,7 +14,7 @@ use bancho_packet::{
     },
 };
 use redis::AsyncCommands;
-use tracing::{debug, info_span, instrument, Instrument};
+use tracing::{debug, error, info_span, instrument, Instrument};
 use uuid::Uuid;
 
 use crate::db::Databases;
@@ -64,13 +64,13 @@ pub async fn bancho_server(
     data: Data<Arc<Databases>>,
 ) -> Result<HttpResponse, Error> {
     match req.headers().get("osu-token") {
-        Some(token) => handle_regular_packet(&req, token.to_str().unwrap(), body, &data).await,
-        None => handle_auth_packet(&req, body, &data).await,
+        Some(token) => handle_regular_req(&req, token.to_str().unwrap(), body, &data).await,
+        None => handle_auth_req(&req, body, &data).await,
     }
 }
 
 #[instrument(skip_all)]
-async fn handle_auth_packet(
+async fn handle_auth_req(
     req: &HttpRequest,
     mut body: Bytes,
     data: &Databases,
@@ -129,7 +129,7 @@ async fn handle_auth_packet(
 }
 
 #[instrument(skip(body, data))]
-async fn handle_regular_packet(
+async fn handle_regular_req(
     _req: &HttpRequest,
     token: &str,
     body: Bytes,
@@ -159,20 +159,32 @@ async fn handle_regular_packet(
         match id {
             0 => {
                 let status = reader::client_user_status(&mut in_buf);
-                println!("{:?}", status);
+                debug!(msg = "received user status", status = &status.status);
             }
             4 => (), // update last pinged... maybe should have something to destroy it on no ping for n amount of time
             1 => {
                 let message = reader::client_send_mesage(&mut in_buf);
-                println!("{:?}", message);
+                debug!(
+                    msg = "packet received",
+                    typ = "send_message",
+                    target = &message.target
+                );
             }
             63 => {
                 let channel_name = in_buf.get_string();
-                println!("{} has joined channel: {}", token, channel_name);
+                debug!(
+                    msg = "packet received",
+                    typ = "join_channel",
+                    channel_name = &channel_name
+                );
                 bancho_channel_join_success(&mut player_buffer, channel_name.as_str());
             }
-            _ => {
-                println!("Unhandled packet: {} (length: {})", id, packet_length);
+            id => {
+                error!(
+                    msg = "unrecognised packet received",
+                    id = id,
+                    length = packet_length
+                );
                 in_buf.advance(packet_length as usize);
             }
         }
