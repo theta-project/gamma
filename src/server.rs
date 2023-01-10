@@ -69,19 +69,18 @@ pub async fn bancho_server(
     }
 }
 
-#[instrument(skip(body, data))]
+#[instrument(skip_all)]
 async fn handle_auth_packet(
     req: &HttpRequest,
     mut body: Bytes,
     data: &Databases,
 ) -> Result<HttpResponse, Error> {
     let login = LoginData::from_slice(&mut body)
-        .map_err(|_| actix_web::error::PayloadError::EncodingCorrupted);
+        .map_err(|_| actix_web::error::PayloadError::EncodingCorrupted)?;
 
-    let login_cloned = &login?.clone();
     debug!(
         "login request for `{}` from `{:?}`",
-        &login_cloned.username,
+        &login.username,
         req.connection_info().peer_addr()
     );
     // TODO: Check against db, etc.
@@ -89,29 +88,32 @@ async fn handle_auth_packet(
     let mut buffer = BytesMut::new();
     let uuid = Uuid::new_v4();
 
-    bancho_login_reply(&mut buffer, 69);
-    bancho_channel_available(
-        &mut buffer,
-        BanchoChannel {
-            name: "#osu".to_string(),
-            topic: "default channel".to_string(),
-            connected: 1,
-        },
-    );
-    bancho_protocol_negotiaton(&mut buffer, 19);
-    bancho_login_permissions(&mut buffer, 4);
+    {
+        let _span = info_span!("prepare_response", uuid = uuid.to_string()).entered();
+        bancho_login_reply(&mut buffer, 69);
+        bancho_channel_available(
+            &mut buffer,
+            BanchoChannel {
+                name: "#osu".to_string(),
+                topic: "default channel".to_string(),
+                connected: 1,
+            },
+        );
+        bancho_protocol_negotiaton(&mut buffer, 19);
+        bancho_login_permissions(&mut buffer, 4);
 
-    bancho_channel_join_success(&mut buffer, "#osu");
-    bancho_announce(
-        &mut buffer,
-        format!("Welcome to Gamma, {}!", &login_cloned.clone().username).as_str(),
-    );
+        bancho_channel_join_success(&mut buffer, "#osu");
+        bancho_announce(
+            &mut buffer,
+            format!("Welcome to Gamma, {}!", &login.username).as_str(),
+        );
 
-    bancho_channel_listing_complete(&mut buffer);
-    let bot_presence = &*BOT_PRESENCE;
-    bancho_user_presence(&mut buffer, bot_presence.clone());
+        bancho_channel_listing_complete(&mut buffer);
+        let bot_presence = &*BOT_PRESENCE;
+        bancho_user_presence(&mut buffer, bot_presence.clone());
 
-    res.append_header(("cho-token", uuid.to_string()));
+        res.append_header(("cho-token", uuid.to_string()));
+    }
 
     let _: () = data
         .redis()

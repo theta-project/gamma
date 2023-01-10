@@ -26,7 +26,7 @@ pub struct LoginData {
 }
 
 impl LoginData {
-    #[instrument(name = "deserialise_login_data")]
+    #[instrument(name = "deserialise_login_data", skip_all, fields(buf_len = buf.len()))]
     pub fn from_slice(buf: &mut Bytes) -> Result<Self, ParseError> {
         let username = String::from_utf8(buf.take_while(|b| b != b'\n').to_vec())
             .map_err(|_| ParseError::BadUTF8)?;
