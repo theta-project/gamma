@@ -21,6 +21,7 @@
 
         buildInputs = with pkgs; [
           openssl
+          protobuf
           pkg-config
         ];
 
