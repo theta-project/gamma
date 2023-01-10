@@ -3,7 +3,7 @@ use std::sync::Arc;
 use actix_web::{
     get, post,
     web::{Buf, Bytes, BytesMut, Data},
-    Error, HttpRequest, HttpResponse, Responder,
+    HttpRequest, HttpResponse, Responder,
 };
 use bancho_packet::{
     buffer::serialization::BytesMutExt,
@@ -17,7 +17,10 @@ use redis::AsyncCommands;
 use tracing::{debug, error, info_span, instrument, Instrument};
 use uuid::Uuid;
 
-use crate::db::Databases;
+use crate::{
+    db::Databases,
+    errors::{ExternalError, InternalError, RequestError, Result},
+};
 extern crate lazy_static;
 
 lazy_static::lazy_static! {
@@ -62,9 +65,12 @@ pub async fn bancho_server(
     req: HttpRequest,
     body: Bytes,
     data: Data<Arc<Databases>>,
-) -> Result<HttpResponse, Error> {
+) -> Result<HttpResponse> {
     match req.headers().get("osu-token") {
-        Some(token) => handle_regular_req(&req, token.to_str().unwrap(), body, &data).await,
+        Some(token) => {
+            let token = token.to_str().map_err(|_| ExternalError::InvalidToken)?;
+            handle_regular_req(&req, token, body, &data).await
+        }
         None => handle_auth_req(&req, body, &data).await,
     }
 }
@@ -74,9 +80,8 @@ async fn handle_auth_req(
     req: &HttpRequest,
     mut body: Bytes,
     data: &Databases,
-) -> Result<HttpResponse, Error> {
-    let login = LoginData::from_slice(&mut body)
-        .map_err(|_| actix_web::error::PayloadError::EncodingCorrupted)?;
+) -> Result<HttpResponse> {
+    let login = LoginData::from_slice(&mut body).map_err(ExternalError::MalformedPacket)?;
 
     debug!(
         "login request for `{}` from `{:?}`",
@@ -115,15 +120,14 @@ async fn handle_auth_req(
         res.append_header(("cho-token", uuid.to_string()));
     }
 
-    let _: () = data
-        .redis()
-        .set(
+    data.redis()
+        .set::<_, _, ()>(
             format!("gamma::buffers::{}", uuid),
             BytesMut::new().to_vec(),
         )
         .instrument(info_span!("add_session_buffer", uuid = uuid.to_string()))
         .await
-        .unwrap();
+        .map_err(InternalError::RedisError)?;
 
     Ok(res.body(buffer))
 }
@@ -134,14 +138,14 @@ async fn handle_regular_req(
     token: &str,
     body: Bytes,
     data: &Databases,
-) -> Result<HttpResponse, Error> {
+) -> Result<HttpResponse> {
     let mut res = HttpResponse::Ok();
     let buffer: Vec<u8> = data
         .redis()
         .get(format!("gamma::buffers::{}", token))
         .instrument(info_span!("get_session_buffer", token = token))
         .await
-        .unwrap();
+        .map_err(|_| ExternalError::InvalidToken)?;
 
     // get the players buffer
     let mut player_buffer = BytesMut::from(buffer.as_slice());
@@ -194,14 +198,18 @@ async fn handle_regular_req(
     }
 
     // flush the buffer
-    let _: () = data
+    if let Err(e) = data
         .redis()
-        .set(
+        .set::<_, _, ()>(
             format!("gamma::buffers::{}", token),
             BytesMut::new().to_vec(),
         )
         .instrument(info_span!("flush_player_buffer", token = token))
         .await
-        .unwrap();
+    {
+        // report the error, but still send back the packets
+        RequestError::Internal(InternalError::RedisError(e)).report();
+    };
+
     Ok(res.body(player_buffer))
 }

@@ -8,6 +8,7 @@ use tracing_actix_web::TracingLogger;
 use crate::{db::Databases, settings::Settings, telem::setup_tracing};
 
 mod db;
+mod errors;
 mod server;
 mod settings;
 mod telem;

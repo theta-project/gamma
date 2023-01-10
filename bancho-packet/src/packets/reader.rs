@@ -3,11 +3,7 @@ use crate::packets::structures;
 use bytes::{Buf, Bytes};
 use tracing::instrument;
 
-// TODO: Use `thiserror`  cos macros are fun
-#[derive(Debug)]
-pub enum ParseError {
-    BadUTF8,
-}
+const PARSE_BAD_UTF8: &str = "bad utf-8 in string";
 
 // TODO: This doesnt need to copy, could just slice into the buf
 #[derive(Debug, Clone)]
@@ -27,37 +23,37 @@ pub struct LoginData {
 
 impl LoginData {
     #[instrument(name = "deserialise_login_data", skip_all, fields(buf_len = buf.len()))]
-    pub fn from_slice(buf: &mut Bytes) -> Result<Self, ParseError> {
+    pub fn from_slice(buf: &mut Bytes) -> Result<Self, &'static str> {
         let username = String::from_utf8(buf.take_while(|b| b != b'\n').to_vec())
-            .map_err(|_| ParseError::BadUTF8)?;
+            .map_err(|_| PARSE_BAD_UTF8)?;
         buf.advance(1);
 
         let password_md5 = String::from_utf8(buf.take_while(|b| b != b'\n').to_vec())
-            .map_err(|_| ParseError::BadUTF8)?;
+            .map_err(|_| PARSE_BAD_UTF8)?;
         buf.advance(1); // '\n'
 
         let client_version = String::from_utf8(buf.take_while(|b| b != b'|').to_vec())
-            .map_err(|_| ParseError::BadUTF8)?;
+            .map_err(|_| PARSE_BAD_UTF8)?;
         buf.advance(1);
 
         let utc_offset = String::from_utf8(buf.take_while(|b| b != b'|').to_vec())
-            .map_err(|_| ParseError::BadUTF8)?
+            .map_err(|_| PARSE_BAD_UTF8)?
             .parse::<i32>()
             .unwrap();
         buf.advance(1);
 
         let show_city = String::from_utf8(buf.take_while(|b| b != b'|').to_vec())
-            .map_err(|_| ParseError::BadUTF8)?
+            .map_err(|_| PARSE_BAD_UTF8)?
             .parse::<i32>()
             .unwrap();
         buf.advance(1);
 
         let client_hashes = String::from_utf8(buf.take_while(|b| b != b'|').to_vec())
-            .map_err(|_| ParseError::BadUTF8)?;
+            .map_err(|_| PARSE_BAD_UTF8)?;
         buf.advance(1);
 
         let allow_pms = String::from_utf8(buf.take_while(|b| b != b'\n').to_vec())
-            .map_err(|_| ParseError::BadUTF8)?
+            .map_err(|_| PARSE_BAD_UTF8)?
             .parse::<i32>()
             .unwrap();
         buf.advance(1);

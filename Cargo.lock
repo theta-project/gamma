@@ -852,6 +852,7 @@ dependencies = [
  "redis",
  "serde",
  "sqlx",
+ "thiserror",
  "tracing",
  "tracing-actix-web",
  "tracing-log",
