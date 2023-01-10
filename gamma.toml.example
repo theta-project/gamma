@@ -1,6 +1,10 @@
 ip = "127.0.0.1"
 port = 8080
+log_level = "info"
 
 [db]
 redis_url = "redis://127.0.0.1/"
 mysql_url = "mysql://gamma:1234@localhost:3306/gamma"
+
+# [telem]
+# endpoint = "http://localhost:4317"

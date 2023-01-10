@@ -128,7 +128,7 @@ async fn handle_auth_req(
     Ok(res.body(buffer))
 }
 
-#[instrument(skip(body, data))]
+#[instrument(skip_all)]
 async fn handle_regular_req(
     _req: &HttpRequest,
     token: &str,
