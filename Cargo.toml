@@ -13,7 +13,8 @@ members = [".", "bancho-packet"]
 bancho-packet = { version = "0.2.0", path="bancho-packet"}
 
 actix-web = "4"
-redis = { version = "0.22.1", features = ["aio", "tokio-comp", "connection-manager"] }
+redis = { version = "0.22.1", features = ["aio", "tokio-comp"] }
+deadpool-redis = { version = "0.11.1", features = ["rt_tokio_1"] }
 sqlx = { version = "0.6", features = ["runtime-tokio-native-tls", "mysql"] }
 config = "0.13.3"
 dotenv = "0.15.0"

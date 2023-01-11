@@ -121,6 +121,7 @@ async fn handle_auth_req(
     }
 
     data.redis()
+        .await?
         .set::<_, _, ()>(
             format!("gamma::buffers::{}", uuid),
             BytesMut::new().to_vec(),
@@ -142,6 +143,7 @@ async fn handle_regular_req(
     let mut res = HttpResponse::Ok();
     let buffer: Vec<u8> = data
         .redis()
+        .await?
         .get(format!("gamma::buffers::{}", token))
         .instrument(info_span!("get_session_buffer", token = token))
         .await
@@ -200,6 +202,7 @@ async fn handle_regular_req(
     // flush the buffer
     if let Err(e) = data
         .redis()
+        .await?
         .set::<_, _, ()>(
             format!("gamma::buffers::{}", token),
             BytesMut::new().to_vec(),
@@ -208,7 +211,7 @@ async fn handle_regular_req(
         .await
     {
         // report the error, but still send back the packets
-        RequestError::Internal(InternalError::RedisError(e)).report();
+        let _ = RequestError::from(InternalError::RedisError(e));
     };
 
     Ok(res.body(player_buffer))
