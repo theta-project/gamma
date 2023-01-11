@@ -136,7 +136,7 @@ pub fn bacnho_target_is_silenced(buf: &mut Buffer, message: structures::BanchoMe
 }
 
 pub fn bancho_version_update_forced(buf: &mut Buffer) {
-    buf.with_header(PacketIDs::BanchoVersionUpdateForced as i16, |buf| {})
+    buf.with_header(PacketIDs::BanchoVersionUpdateForced as i16, |_| {})
 }
 
 pub fn bancho_switch_server(buf: &mut Buffer, server: &str) {
@@ -146,7 +146,7 @@ pub fn bancho_switch_server(buf: &mut Buffer, server: &str) {
 }
 
 pub fn bancho_account_restricted(buf: &mut Buffer) {
-    buf.with_header(PacketIDs::BanchoAccountRestricted as i16, |buf| {})
+    buf.with_header(PacketIDs::BanchoAccountRestricted as i16, |_| {})
 }
 
 pub fn bancho_rtx(buf: &mut Buffer, rtx: &str) {

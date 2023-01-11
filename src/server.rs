@@ -1,19 +1,26 @@
+use std::sync::Arc;
+
 use actix_web::{
     get, post,
-    web::{Buf, Bytes, BytesMut, Payload, Data},
-    Error, HttpRequest, HttpResponse, HttpResponseBuilder, Responder,
+    web::{Buf, Bytes, BytesMut, Data},
+    HttpRequest, HttpResponse, Responder,
 };
 use bancho_packet::{
     buffer::serialization::BytesMutExt,
     packets::{
         reader::{self, *},
-        structures::{self, *},
+        structures::*,
         writer::*,
     },
 };
-use log::debug;
-use redis::Commands;
+use redis::AsyncCommands;
+use tracing::{debug, error, info_span, instrument, Instrument};
 use uuid::Uuid;
+
+use crate::{
+    db::Databases,
+    errors::{ExternalError, InternalError, RequestError, Result},
+};
 extern crate lazy_static;
 
 lazy_static::lazy_static! {
@@ -28,7 +35,7 @@ lazy_static::lazy_static! {
         latitude: 0.,
         player_rank: 0
     };
-    
+
     static ref BOT_STATS: BanchoStats = BanchoStats {
         player_id: 3,
         status: ClientStatus {
@@ -48,29 +55,37 @@ lazy_static::lazy_static! {
     };
 }
 
-
-
 #[get("/")]
 pub async fn index() -> impl Responder {
     "theta! Gamma Server\n"
 }
 
 #[post("/")]
-pub async fn bancho_server(req: HttpRequest, body: Bytes, data: Data<crate::Databases>) -> Result<HttpResponse, Error> {
+pub async fn bancho_server(
+    req: HttpRequest,
+    body: Bytes,
+    data: Data<Arc<Databases>>,
+) -> Result<HttpResponse> {
     match req.headers().get("osu-token") {
-        Some(token) => handle_packets(req.clone(), token.to_str().unwrap(), body, data).await,
-        None => do_auth(req, body, data),
+        Some(token) => {
+            let token = token.to_str().map_err(|_| ExternalError::InvalidToken)?;
+            handle_regular_req(&req, token, body, &data).await
+        }
+        None => handle_auth_req(&req, body, &data).await,
     }
 }
 
-fn do_auth(req: HttpRequest, mut body: Bytes, data: Data<crate::Databases>) -> Result<HttpResponse, Error> {
-    let login = LoginData::from_slice(&mut body)
-        .map_err(|_| actix_web::error::PayloadError::EncodingCorrupted);
+#[instrument(skip_all)]
+async fn handle_auth_req(
+    req: &HttpRequest,
+    mut body: Bytes,
+    data: &Databases,
+) -> Result<HttpResponse> {
+    let login = LoginData::from_slice(&mut body).map_err(ExternalError::MalformedPacket)?;
 
-    let login_cloned = &login?.clone();
     debug!(
         "login request for `{}` from `{:?}`",
-        &login_cloned.username,
+        &login.username,
         req.connection_info().peer_addr()
     );
     // TODO: Check against db, etc.
@@ -78,45 +93,61 @@ fn do_auth(req: HttpRequest, mut body: Bytes, data: Data<crate::Databases>) -> R
     let mut buffer = BytesMut::new();
     let uuid = Uuid::new_v4();
 
-    bancho_login_reply(&mut buffer, 69);
-    bancho_channel_available(
-        &mut buffer,
-        BanchoChannel {
-            name: "#osu".to_string(),
-            topic: "default channel".to_string(),
-            connected: 1,
-        },
-    );
-    bancho_protocol_negotiaton(&mut buffer, 19);
-    bancho_login_permissions(&mut buffer, 4);
+    {
+        let _span = info_span!("prepare_response", uuid = uuid.to_string()).entered();
+        bancho_login_reply(&mut buffer, 69);
+        bancho_channel_available(
+            &mut buffer,
+            BanchoChannel {
+                name: "#osu".to_string(),
+                topic: "default channel".to_string(),
+                connected: 1,
+            },
+        );
+        bancho_protocol_negotiaton(&mut buffer, 19);
+        bancho_login_permissions(&mut buffer, 4);
 
-    bancho_channel_join_success(&mut buffer, "#osu");
-    bancho_announce(
-        &mut buffer,
-        format!("Welcome to Gamma, {}!", &login_cloned.clone().username).as_str(),
-    );
+        bancho_channel_join_success(&mut buffer, "#osu");
+        bancho_announce(
+            &mut buffer,
+            format!("Welcome to Gamma, {}!", &login.username).as_str(),
+        );
 
-    bancho_channel_listing_complete(&mut buffer);
-    let bot_presence = &*BOT_PRESENCE;
-    bancho_user_presence(&mut buffer, bot_presence.clone());
+        bancho_channel_listing_complete(&mut buffer);
+        let bot_presence = &*BOT_PRESENCE;
+        bancho_user_presence(&mut buffer, bot_presence.clone());
 
-    res.append_header(("cho-token", uuid.to_string()));
+        res.append_header(("cho-token", uuid.to_string()));
+    }
 
-    let mut redis_conn = data.redis.clone().get_connection().unwrap();
-    let _ : () = redis_conn.set(format!("gamma::buffers::{}", uuid.to_string()), BytesMut::new().to_vec()).unwrap();
+    data.redis()
+        .await?
+        .set::<_, _, ()>(
+            format!("gamma::buffers::{}", uuid),
+            BytesMut::new().to_vec(),
+        )
+        .instrument(info_span!("add_session_buffer", uuid = uuid.to_string()))
+        .await
+        .map_err(InternalError::Redis)?;
 
     Ok(res.body(buffer))
 }
 
-async fn handle_packets(
-    req: HttpRequest,
+#[instrument(skip_all)]
+async fn handle_regular_req(
+    _req: &HttpRequest,
     token: &str,
     body: Bytes,
-    data: Data<crate::Databases>
-) -> Result<HttpResponse, Error> {
+    data: &Databases,
+) -> Result<HttpResponse> {
     let mut res = HttpResponse::Ok();
-    let mut redis_conn = data.redis.clone().get_connection().unwrap();
-    let buffer: Vec<u8> = redis_conn.get(format!("gamma::buffers::{}", token)).unwrap();
+    let buffer: Vec<u8> = data
+        .redis()
+        .await?
+        .get(format!("gamma::buffers::{}", token))
+        .instrument(info_span!("get_session_buffer", token = token))
+        .await
+        .map_err(|_| ExternalError::InvalidToken)?;
 
     // get the players buffer
     let mut player_buffer = BytesMut::from(buffer.as_slice());
@@ -134,20 +165,32 @@ async fn handle_packets(
         match id {
             0 => {
                 let status = reader::client_user_status(&mut in_buf);
-                println!("{:?}", status);
+                debug!(msg = "received user status", status = &status.status);
             }
             4 => (), // update last pinged... maybe should have something to destroy it on no ping for n amount of time
             1 => {
                 let message = reader::client_send_mesage(&mut in_buf);
-                println!("{:?}", message);
+                debug!(
+                    msg = "packet received",
+                    typ = "send_message",
+                    target = &message.target
+                );
             }
             63 => {
                 let channel_name = in_buf.get_string();
-                println!("{} has joined channel: {}", token, channel_name);
+                debug!(
+                    msg = "packet received",
+                    typ = "join_channel",
+                    channel_name = &channel_name
+                );
                 bancho_channel_join_success(&mut player_buffer, channel_name.as_str());
             }
-            _ => {
-                println!("Unhandled packet: {} (length: {})", id, packet_length);
+            id => {
+                error!(
+                    msg = "unrecognised packet received",
+                    id = id,
+                    length = packet_length
+                );
                 in_buf.advance(packet_length as usize);
             }
         }
@@ -157,6 +200,19 @@ async fn handle_packets(
     }
 
     // flush the buffer
-    let _ : () = redis_conn.set(format!("gamma::buffers::{}", token), BytesMut::new().to_vec()).unwrap();
+    if let Err(e) = data
+        .redis()
+        .await?
+        .set::<_, _, ()>(
+            format!("gamma::buffers::{}", token),
+            BytesMut::new().to_vec(),
+        )
+        .instrument(info_span!("flush_player_buffer", token = token))
+        .await
+    {
+        // report the error, but still send back the packets
+        let _ = RequestError::from(InternalError::Redis(e));
+    };
+
     Ok(res.body(player_buffer))
 }

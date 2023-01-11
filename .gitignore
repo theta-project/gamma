@@ -1,2 +1,5 @@
 /target
 .env
+.envrc
+.direnv
+gamma.toml
