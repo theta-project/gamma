@@ -72,22 +72,20 @@ impl BytesMutExt for BytesMut {
         let mut shift = 0;
 
         let mut byte = self.get_u8();
-
+        // check if the highest bit is set
         if (byte & 0x80) == 0 {
+            // the value is one byte long, return it
+            return (byte & 0x7f) as usize;
+        }
+
+        loop {
             result |= (byte & 0x7f) << shift;
-        } else {
-            let mut end = false;
+            shift += 7;
 
-            while !end {
-                if shift > 0 {
-                    byte = self.get_u8();
-                }
-
-                result |= (byte & 0x7f) << shift;
-                if (byte & 0x80) == 0 {
-                    end = true;
-                }
-                shift += 7;
+            byte = self.get_u8();
+            if (byte & 0x80) == 0 {
+                // the highest bit is not set, the value has ended
+                break;
             }
         }
 
@@ -115,7 +113,7 @@ impl BytesMutExt for BytesMut {
 
             self.advance(length);
         }
-        string.retain(|x| x != '\0' && x != '\u{b}');
+        string.retain(|x| x != '\0');
         string
     }
 
