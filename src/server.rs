@@ -128,7 +128,7 @@ async fn handle_auth_req(
         )
         .instrument(info_span!("add_session_buffer", uuid = uuid.to_string()))
         .await
-        .map_err(InternalError::RedisError)?;
+        .map_err(InternalError::Redis)?;
 
     Ok(res.body(buffer))
 }
@@ -211,7 +211,7 @@ async fn handle_regular_req(
         .await
     {
         // report the error, but still send back the packets
-        let _ = RequestError::from(InternalError::RedisError(e));
+        let _ = RequestError::from(InternalError::Redis(e));
     };
 
     Ok(res.body(player_buffer))

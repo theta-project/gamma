@@ -1,10 +1,9 @@
 use std::{str::FromStr, time::Duration};
 
-use crate::errors::InternalError;
-use anyhow::Result;
+use crate::errors::{InternalError, RequestError};
 use deadpool_redis::Pool as RedisPool;
 use redis::AsyncCommands;
-use tracing::{debug_span, info, info_span, instrument, Instrument};
+use tracing::{info, info_span, instrument, Instrument, Level};
 
 use crate::settings::DatabaseSettings;
 use sqlx::{
@@ -20,47 +19,53 @@ pub struct Databases {
 }
 
 impl Databases {
-    #[instrument(name = "connect_databases", skip(settings))]
-    pub async fn new(settings: &DatabaseSettings) -> Result<Self> {
-        info!("connecting to redis");
+    #[instrument(name = "connect_databases", skip_all)]
+    pub async fn new(settings: &DatabaseSettings) -> Self {
         let redis = {
             let cfg = deadpool_redis::Config::from_url(settings.redis_url.as_str());
-            cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1))?
+            cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1))
+                .unwrap()
         };
 
         // test to make sure the connection actually works
         redis
             .get()
-            .await?
-            .acl_whoami()
+            .instrument(info_span!("get_redis_conn"))
+            .await
+            .unwrap()
+            .acl_whoami::<()>()
             .instrument(info_span!("test_redis_conn"))
-            .await?;
+            .await
+            .unwrap();
 
-        info!("connecting to mysql");
-        let mut mysql = MySqlConnectOptions::from_str(&settings.mysql_url)?;
+        let mut mysql = MySqlConnectOptions::from_str(&settings.mysql_url).unwrap();
         mysql
             .log_statements(tracing::log::LevelFilter::Debug)
             .log_slow_statements(tracing::log::LevelFilter::Info, Duration::from_secs(1));
-        let mysql = MySqlPoolOptions::new().connect_with(mysql).await?;
+        let mysql = MySqlPoolOptions::new()
+            .connect_with(mysql)
+            .instrument(info_span!("get_mysql_conn"))
+            .await
+            .unwrap();
 
-        Ok(Databases { redis, mysql })
+        Databases { redis, mysql }
     }
 
     /// Get a redis connection
-    pub async fn redis(&self) -> Result<impl AsyncCommands, InternalError> {
+    #[instrument(level = Level::DEBUG, name = "get_redis_conn", skip_all)]
+    pub async fn redis(&self) -> Result<impl AsyncCommands, RequestError> {
         self.redis
             .get()
-            .instrument(debug_span!("get_redis_conn"))
             .await
-            .map_err(|e| InternalError::RedisPoolError(e))
+            .map_err(|e| InternalError::RedisPool(e).into())
     }
 
     /// Get a mysql connection
-    pub async fn mysql(&self) -> Result<PoolConnection, InternalError> {
+    #[instrument(level = Level::DEBUG, name = "get_mysql_conn", skip_all)]
+    pub async fn mysql(&self) -> Result<PoolConnection, RequestError> {
         self.mysql
             .acquire()
-            .instrument(debug_span!("get_mysql_conn"))
             .await
-            .map_err(|e| InternalError::SqlPoolError(e))
+            .map_err(|e| InternalError::SqlPool(e).into())
     }
 }
