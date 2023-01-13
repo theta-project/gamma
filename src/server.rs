@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-
 use actix_web::{
     get, post,
     web::{Buf, Bytes, BytesMut, Data},
@@ -14,6 +13,8 @@ use bancho_packet::{
         writer::*,
     },
 };
+
+use bcrypt::verify;
 use redis::AsyncCommands;
 use sqlx::{Executor, Row};
 use tracing::{debug, error, info_span, instrument, Instrument};
@@ -21,7 +22,7 @@ use uuid::Uuid;
 
 use crate::{
     db::Databases,
-    errors::{ExternalError, InternalError, RequestError, Result},
+    errors::{ExternalError, InternalError, RequestError, Result}, sessions,
 };
 extern crate lazy_static;
 
@@ -95,6 +96,7 @@ async fn handle_auth_req(
     let mut res = HttpResponse::Ok();
     let mut buffer = BytesMut::new();
     let uuid = Uuid::new_v4();
+
     let username_safe = login.username.replace(' ', "_").to_lowercase();
     let player_query = sqlx::query("SELECT * FROM `users` WHERE username_safe = ?")
         .bind(username_safe)
@@ -107,11 +109,38 @@ async fn handle_auth_req(
         return Ok(res.body(buffer));
     }
     let user_data = player_query.unwrap();
-    let _user_id: i32 = user_data.get(0_usize);
+    let password: String = user_data.get(5_usize);
+    if !verify(login.password_md5, &password).unwrap() {
+        bancho_login_reply(&mut buffer, -1);
+        res.append_header(("cho-token", "invalid password"));
+        return Ok(res.body(buffer));
+    }
 
+    let user_id: i32 = user_data.get(0_usize);
+    let stats = sqlx::query("SELECT * FROM `user_stats` WHERE user_id = ? AND mode = 0")
+        .bind(user_id)
+        .fetch_one(&mut mysql_pool)
+        .await;
+
+    if stats.is_err() {
+        debug!("could not find player in stats table");
+        bancho_login_reply(&mut buffer, -5);
+        res.append_header(("cho-token", "invalid stats"));
+        return Ok(res.body(buffer));
+    }
     {
         let _span = info_span!("prepare_response", uuid = uuid.to_string()).entered();
+        // Write all of the necessary login packets, similar to that of the official osu! server
+        let user_stats = stats.unwrap();
+        let session = sessions::build_session(user_data, user_stats, uuid.to_string());
+
         bancho_login_reply(&mut buffer, 69);
+        bancho_protocol_negotiaton(&mut buffer, 19);
+        bancho_announce(
+            &mut buffer,
+            format!("Welcome to Gamma, {}!", &login.username).as_str(),
+        );
+        bancho_login_permissions(&mut buffer, 4);
         bancho_channel_available(
             &mut buffer,
             BanchoChannel {
@@ -120,14 +149,13 @@ async fn handle_auth_req(
                 connected: 1,
             },
         );
-        bancho_protocol_negotiaton(&mut buffer, 19);
-        bancho_login_permissions(&mut buffer, 4);
+        bancho_ban_info(&mut buffer, 0);
+        
+
+        bancho_user_presence(&mut buffer, session.presence.clone());
+        bancho_handle_osu_update(&mut buffer, session.stats.clone());
 
         bancho_channel_join_success(&mut buffer, "#osu");
-        bancho_announce(
-            &mut buffer,
-            format!("Welcome to Gamma, {}!", &login.username).as_str(),
-        );
 
         bancho_channel_listing_complete(&mut buffer);
 

@@ -126,6 +126,12 @@ pub fn bancho_channel_listing_complete(buf: &mut Buffer) {
     })
 }
 
+pub fn bancho_ban_info(buf: &mut Buffer, ban_info: u32) {
+    buf.with_header(PacketIDs::BanchoBanInfo as i16, |buf| {
+        buf.put_u32_le(ban_info);
+    })
+}
+
 pub fn bancho_user_pm_blocked(buf: &mut Buffer, message: structures::BanchoMessage) {
     buf.with_header(PacketIDs::BanchoUserPmBlocked as i16, |buf| {
         buf.put_string(&message.sending_client);
