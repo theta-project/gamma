@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::sessions;
+
 use actix_web::{
     get, post,
     web::{Buf, Bytes, BytesMut, Data},
@@ -107,7 +107,7 @@ async fn handle_auth_req(
         return Ok(res.body(buffer));
     }
     let user_data = player_query.unwrap();
-    let user_id: i32 = user_data.get(0 as usize);
+    let _user_id: i32 = user_data.get(0_usize);
 
     {
         let _span = info_span!("prepare_response", uuid = uuid.to_string()).entered();

@@ -3,7 +3,7 @@ use std::{str::FromStr, time::Duration};
 use crate::errors::{InternalError, RequestError};
 use deadpool_redis::Pool as RedisPool;
 use redis::AsyncCommands;
-use tracing::{info, info_span, instrument, Instrument, Level};
+use tracing::{info_span, instrument, Instrument, Level};
 
 use crate::settings::DatabaseSettings;
 use sqlx::{
