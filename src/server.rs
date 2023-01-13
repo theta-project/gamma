@@ -141,14 +141,33 @@ async fn handle_auth_req(
             format!("Welcome to Gamma, {}!", &login.username).as_str(),
         );
         bancho_login_permissions(&mut buffer, 4);
-        bancho_channel_available(
-            &mut buffer,
-            BanchoChannel {
-                name: "#osu".to_string(),
-                topic: "default channel".to_string(),
-                connected: 1,
-            },
-        );
+        bancho_channel_listing_complete(&mut buffer);
+        let channels_query = sqlx::query("SELECT * FROM `channels`")
+        .fetch_all(&mut mysql_pool)
+        .await;
+        if channels_query.is_err() {
+            debug!("could not find channels in db");
+            bancho_login_reply(&mut buffer, -5);
+            res.append_header(("cho-token", "invalid channels"));
+            return Ok(res.body(buffer));
+        }
+        let channels = channels_query.unwrap();
+        for channel in channels {
+            let name: String = channel.get(1_usize);
+            let topic: String = channel.get(2_usize);
+            let autojoin: i8 = channel.get(4_usize);
+            bancho_channel_available(
+                &mut buffer,
+                BanchoChannel {
+                    name: name.clone(),
+                    topic: topic.clone(),
+                    connected: 0,
+                },
+            );
+            if autojoin == 1 {
+                bancho_channel_join_success(&mut buffer, &name);
+            }
+        }
         bancho_ban_info(&mut buffer, 0);
         
 
@@ -157,7 +176,7 @@ async fn handle_auth_req(
 
         bancho_channel_join_success(&mut buffer, "#osu");
 
-        bancho_channel_listing_complete(&mut buffer);
+        
 
         let bot_presence = &*BOT_PRESENCE;
         let bot_stats = &*BOT_STATS;
