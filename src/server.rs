@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::sessions;
 use actix_web::{
     get, post,
     web::{Buf, Bytes, BytesMut, Data},
@@ -14,6 +15,7 @@ use bancho_packet::{
     },
 };
 use redis::AsyncCommands;
+use sqlx::{Executor, Row};
 use tracing::{debug, error, info_span, instrument, Instrument};
 use uuid::Uuid;
 
@@ -25,7 +27,7 @@ extern crate lazy_static;
 
 lazy_static::lazy_static! {
     static ref BOT_PRESENCE: BanchoPresence = BanchoPresence {
-        player_id: 3,
+        player_id: 5,
         username: "GammaBot".to_string(),
         timezone: 24,
         country_code: 0,
@@ -37,20 +39,20 @@ lazy_static::lazy_static! {
     };
 
     static ref BOT_STATS: BanchoStats = BanchoStats {
-        player_id: 3,
+        player_id: 5,
         status: ClientStatus {
             status: 0,
-            status_text: "Helping run Gamma".to_string(),
+            status_text: "- Helping run Gamma".to_string(),
             beatmap_checksum: "".to_string(),
             current_mods: 0,
-            play_mode: 0,
+            play_mode: 2,
             beatmap_id: 0,
         },
         ranked_score: 0,
         accuracy: 0.,
         play_count: 0,
-        total_score: 1337,
-        rank: 0,
+        total_score: 0,
+        rank: 1,
         performance: 0,
     };
 }
@@ -82,6 +84,7 @@ async fn handle_auth_req(
     data: &Databases,
 ) -> Result<HttpResponse> {
     let login = LoginData::from_slice(&mut body).map_err(ExternalError::MalformedPacket)?;
+    let mut mysql_pool = data.mysql().await.unwrap();
 
     debug!(
         "login request for `{}` from `{:?}`",
@@ -92,6 +95,19 @@ async fn handle_auth_req(
     let mut res = HttpResponse::Ok();
     let mut buffer = BytesMut::new();
     let uuid = Uuid::new_v4();
+    let username_safe = login.username.replace(' ', "_").to_lowercase();
+    let player_query = sqlx::query("SELECT * FROM `users` WHERE username_safe = ?")
+        .bind(username_safe)
+        .fetch_one(&mut mysql_pool)
+        .await;
+
+    if player_query.is_err() {
+        bancho_login_reply(&mut buffer, -1);
+        res.append_header(("cho-token", "invalid username"));
+        return Ok(res.body(buffer));
+    }
+    let user_data = player_query.unwrap();
+    let user_id: i32 = user_data.get(0 as usize);
 
     {
         let _span = info_span!("prepare_response", uuid = uuid.to_string()).entered();
@@ -114,16 +130,28 @@ async fn handle_auth_req(
         );
 
         bancho_channel_listing_complete(&mut buffer);
+
         let bot_presence = &*BOT_PRESENCE;
+        let bot_stats = &*BOT_STATS;
         bancho_user_presence(&mut buffer, bot_presence.clone());
+        bancho_handle_osu_update(&mut buffer, bot_stats.clone());
 
         res.append_header(("cho-token", uuid.to_string()));
     }
+    // create a session struct to add to redis as a JSON object with the player id as the key such as "gamma::sessions::player_id"
+    /*let sess = sessions::Session {
+        token: uuid.to_string(),
+        buffer: BytesMut::new(),
+        presence: BanchoPresence { player_id: player_id, username: (), timezone: (), country_code: (), play_mode: (), permissions: (), longitude: (), latitude: (), player_rank: () }
+        stats: {
+
+        }
+    }    */
 
     data.redis()
         .await?
         .set::<_, _, ()>(
-            format!("gamma::buffers::{}", uuid),
+            format!("gamma::sessions::{}", uuid),
             BytesMut::new().to_vec(),
         )
         .instrument(info_span!("add_session_buffer", uuid = uuid.to_string()))
@@ -167,7 +195,6 @@ async fn handle_regular_req(
                 let status = reader::client_user_status(&mut in_buf);
                 debug!(msg = "received user status", status = &status.status);
             }
-            4 => (), // update last pinged... maybe should have something to destroy it on no ping for n amount of time
             1 => {
                 let message = reader::client_send_mesage(&mut in_buf);
                 debug!(
@@ -175,6 +202,19 @@ async fn handle_regular_req(
                     typ = "send_message",
                     target = &message.target
                 );
+            }
+            4 => (), // update last pinged... maybe should have something to destroy it on no ping for n amount of time
+            25 => {
+                let message = reader::client_send_mesage(&mut in_buf);
+                debug!(
+                    msg = "packet received",
+                    typ = "send_message",
+                    target = &message.target
+                );
+                dbg!(&message);
+                if message.target == "GammaBot" {
+                    bancho_announce(&mut player_buffer, "TODO: add commands.");
+                }
             }
             63 => {
                 let channel_name = in_buf.get_string();

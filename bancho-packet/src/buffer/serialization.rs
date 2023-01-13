@@ -57,7 +57,11 @@ impl BytesMutExt for BytesMut {
     }
     fn put_string(&mut self, string: &str) {
         let length = string.len();
-
+        if length == 0 {
+            self.put_u8(11);
+            self.put_u8(0);
+            return;
+        }
         self.put_u8(0xb);
         self.put_uleb(length);
         self.put(string.as_bytes());

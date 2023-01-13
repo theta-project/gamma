@@ -23,7 +23,7 @@ pub struct BanchoPresence {
     pub latitude: f32,
     pub player_rank: i32,
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ClientStatus {
     pub status: u8,
     pub status_text: String,
@@ -32,7 +32,7 @@ pub struct ClientStatus {
     pub play_mode: u8,
     pub beatmap_id: i32,
 }
-
+#[derive(Clone, Debug)]
 pub struct BanchoStats {
     pub player_id: i32,
     pub status: ClientStatus,

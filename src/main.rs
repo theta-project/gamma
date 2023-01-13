@@ -12,6 +12,7 @@ mod errors;
 mod server;
 mod settings;
 mod telem;
+mod sessions;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

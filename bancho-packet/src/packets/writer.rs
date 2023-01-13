@@ -26,12 +26,21 @@ pub fn bancho_ping(buf: &mut Buffer) {
 pub fn bancho_handle_osu_update(buf: &mut Buffer, stats: structures::BanchoStats) {
     buf.with_header(PacketIDs::BanchoHandleOsuUpdate as i16, |buf| {
         buf.put_i32_le(stats.player_id);
+        
         buf.put_u8(stats.status.status);
-        buf.put_string(&stats.status.status_text);
-        buf.put_string(&stats.status.beatmap_checksum);
+        buf.put_string(stats.status.status_text.as_str());
+        buf.put_string(stats.status.beatmap_checksum.as_str());
         buf.put_u32_le(stats.status.current_mods);
         buf.put_u8(stats.status.play_mode);
+        
         buf.put_i32_le(stats.status.beatmap_id);
+        buf.put_i64_le(stats.ranked_score);
+        buf.put_f32_le(stats.accuracy);
+        
+        buf.put_i32_le(stats.play_count);
+        buf.put_i64_le(stats.total_score);
+        buf.put_i32_le(stats.rank);
+        buf.put_i16_le(stats.performance);
     });
 }
 
@@ -101,7 +110,7 @@ pub fn bancho_protocol_negotiaton(buf: &mut Buffer, version: i32) {
 pub fn bancho_user_presence(buf: &mut Buffer, presence: structures::BanchoPresence) {
     buf.with_header(PacketIDs::BanchoUserPresence as i16, |buf| {
         buf.put_i32_le(presence.player_id);
-        buf.put_string(&presence.username);
+        buf.put_string(presence.username.as_str());
         buf.put_u8(presence.timezone);
         buf.put_u8(presence.country_code);
         buf.put_u8(presence.play_mode);
