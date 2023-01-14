@@ -337,6 +337,7 @@ name = "bancho-packet"
 version = "0.2.0"
 dependencies = [
  "bytes",
+ "serde",
  "tracing",
 ]
 
@@ -909,6 +910,7 @@ dependencies = [
  "opentelemetry-otlp",
  "redis",
  "serde",
+ "serde_json",
  "sqlx",
  "thiserror",
  "tracing",

@@ -22,7 +22,8 @@ use uuid::Uuid;
 
 use crate::{
     db::Databases,
-    errors::{ExternalError, InternalError, RequestError, Result}, sessions,
+    errors::{ExternalError, InternalError, RequestError, Result},
+    sessions,
 };
 extern crate lazy_static;
 
@@ -143,8 +144,8 @@ async fn handle_auth_req(
         bancho_login_permissions(&mut buffer, 4);
         bancho_channel_listing_complete(&mut buffer);
         let channels_query = sqlx::query("SELECT * FROM `channels`")
-        .fetch_all(&mut mysql_pool)
-        .await;
+            .fetch_all(&mut mysql_pool)
+            .await;
         if channels_query.is_err() {
             debug!("could not find channels in db");
             bancho_login_reply(&mut buffer, -5);
@@ -169,14 +170,11 @@ async fn handle_auth_req(
             }
         }
         bancho_ban_info(&mut buffer, 0);
-        
 
         bancho_user_presence(&mut buffer, session.presence.clone());
         bancho_handle_osu_update(&mut buffer, session.stats.clone());
 
         bancho_channel_join_success(&mut buffer, "#osu");
-
-        
 
         let bot_presence = &*BOT_PRESENCE;
         let bot_stats = &*BOT_STATS;
@@ -184,26 +182,17 @@ async fn handle_auth_req(
         bancho_handle_osu_update(&mut buffer, bot_stats.clone());
 
         res.append_header(("cho-token", uuid.to_string()));
+        let session_string = serde_json::to_string(&session).unwrap();
+        data.redis()
+            .await?
+            .set::<_, _, ()>(
+                format!("gamma::sessions::{}", uuid),
+                session_string,
+            )
+            .instrument(info_span!("add_session", uuid = uuid.to_string()))
+            .await
+            .map_err(InternalError::Redis)?;
     }
-    // create a session struct to add to redis as a JSON object with the player id as the key such as "gamma::sessions::player_id"
-    /*let sess = sessions::Session {
-        token: uuid.to_string(),
-        buffer: BytesMut::new(),
-        presence: BanchoPresence { player_id: player_id, username: (), timezone: (), country_code: (), play_mode: (), permissions: (), longitude: (), latitude: (), player_rank: () }
-        stats: {
-
-        }
-    }    */
-
-    data.redis()
-        .await?
-        .set::<_, _, ()>(
-            format!("gamma::sessions::{}", uuid),
-            BytesMut::new().to_vec(),
-        )
-        .instrument(info_span!("add_session_buffer", uuid = uuid.to_string()))
-        .await
-        .map_err(InternalError::Redis)?;
 
     Ok(res.body(buffer))
 }
@@ -216,16 +205,18 @@ async fn handle_regular_req(
     data: &Databases,
 ) -> Result<HttpResponse> {
     let mut res = HttpResponse::Ok();
-    let buffer: Vec<u8> = data
+    // get session object from redis
+    let session_redis: String = data
         .redis()
         .await?
-        .get(format!("gamma::buffers::{}", token))
-        .instrument(info_span!("get_session_buffer", token = token))
+        .get(format!("gamma::sessions::{}", token))
+        .instrument(info_span!("get_session", token = token))
         .await
         .map_err(|_| ExternalError::InvalidToken)?;
 
+    let mut session: sessions::Session = serde_json::from_str(&session_redis).unwrap();
     // get the players buffer
-    let mut player_buffer = BytesMut::from(buffer.as_slice());
+    let mut player_buffer = BytesMut::from(session.buffer.as_slice());
     let binding = body.to_vec();
     let body_vec = binding.as_slice();
 
@@ -240,7 +231,28 @@ async fn handle_regular_req(
         match id {
             0 => {
                 let status = reader::client_user_status(&mut in_buf);
-                debug!(msg = "received user status", status = &status.status);
+                session.stats.status = status;
+                bancho_handle_osu_update(&mut player_buffer, session.stats.clone());
+                // TODO: maybe check if a player is already in relax mode and if they are, don't announce it
+                if session.stats.status.current_mods & 128 == 128 {
+                    bancho_announce(
+                        &mut player_buffer,
+                        format!(
+                            "Relax leaderboards have now been enabled, {}",
+                            session.presence.username
+                        )
+                        .as_str(),
+                    );
+                } else if session.stats.status.current_mods & 8192 == 8192 {
+                    bancho_announce(
+                        &mut player_buffer,
+                        format!(
+                            "Autopilot leaderboards have now been enabled, {}",
+                            session.presence.username
+                        )
+                        .as_str(),
+                    );
+                }
             }
             1 => {
                 let message = reader::client_send_mesage(&mut in_buf);
@@ -252,7 +264,7 @@ async fn handle_regular_req(
             }
             4 => (), // update last pinged... maybe should have something to destroy it on no ping for n amount of time
             25 => {
-                let message = reader::client_send_mesage(&mut in_buf);
+                let mut message = reader::client_send_mesage(&mut in_buf);
                 debug!(
                     msg = "packet received",
                     typ = "send_message",
@@ -260,7 +272,25 @@ async fn handle_regular_req(
                 );
                 dbg!(&message);
                 if message.target == "GammaBot" {
-                    bancho_announce(&mut player_buffer, "TODO: add commands.");
+                } else {
+                    let message_cloned = message.clone();
+                    let mut player =
+                        sessions::find_player_from_username(message_cloned.target, data.clone())
+                            .await;
+                    let mut player_buf = BytesMut::from(player.buffer.as_slice());
+
+                    message.sender_id = session.presence.player_id;
+                    message.sending_client = session.presence.username.clone();
+
+                    bancho_send_message(&mut player_buf, message);
+                    player.buffer = player_buf.to_vec();
+                    let to_string = serde_json::to_string(&player).unwrap();
+
+                    let _ = data.redis()
+                        .await?
+                        .set::<_, _, ()>(format!("gamma::sessions::{}", player.token), to_string)
+                        .instrument(info_span!("update_session", token = token))
+                        .await;
                 }
             }
             63 => {
@@ -285,16 +315,13 @@ async fn handle_regular_req(
         length += packet_length as usize;
         length += 1;
     }
-
+    let session_string = serde_json::to_string(&session).unwrap();
     // flush the buffer
     if let Err(e) = data
         .redis()
         .await?
-        .set::<_, _, ()>(
-            format!("gamma::buffers::{}", token),
-            BytesMut::new().to_vec(),
-        )
-        .instrument(info_span!("flush_player_buffer", token = token))
+        .set::<_, _, ()>(format!("gamma::sessions::{}", token), session_string)
+        .instrument(info_span!("update_session", token = token))
         .await
     {
         // report the error, but still send back the packets

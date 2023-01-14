@@ -13,6 +13,7 @@ use sqlx::{
 
 pub type PoolConnection = sqlx::pool::PoolConnection<sqlx::MySql>;
 
+#[derive(Clone)]
 pub struct Databases {
     redis: RedisPool,
     mysql: MySqlPool,

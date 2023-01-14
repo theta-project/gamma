@@ -1,10 +1,16 @@
 use actix_web::web::BytesMut;
-use bancho_packet::{buffer::serialization::Buffer, packets::structures};
+use bancho_packet::{packets::structures};
+use redis::AsyncCommands;
+use serde::{Deserialize, Serialize};
 use sqlx::{mysql::MySqlRow, Row};
 
+use crate::{db::Databases, errors::InternalError};
+
+#[derive(Serialize, Deserialize)]
 pub struct Session {
+    pub id: i32,
     pub token: String,
-    pub buffer: Buffer,
+    pub buffer: Vec<u8>,
     pub presence: structures::BanchoPresence,
     pub stats: structures::BanchoStats,
 }
@@ -78,9 +84,67 @@ pub fn build_session(user_data: MySqlRow, stats: MySqlRow, uuid: String) -> Sess
         performance,
     };
     Session {
+        id,
         token: uuid,
-        buffer: BytesMut::new(),
+        buffer: BytesMut::new().to_vec(),
         presence,
         stats,
+    }
+}
+
+pub async fn find_player_from_username(username: String, data: Databases) -> Session {
+    let all_online = data
+        .redis()
+        .await
+        .unwrap()
+        .keys::<_, Vec<String>>("gamma::sessions::*")
+        .await
+        .map_err(InternalError::Redis);
+
+    for player in all_online {
+        let p = data
+            .redis()
+            .await
+            .unwrap()
+            .get::<_, String>(player)
+            .await
+            .map_err(InternalError::Redis);
+        let session: Session = serde_json::from_str(&p.unwrap()).unwrap();
+        if session.presence.username == username {
+            return session;
+        }
+    }
+    Session {
+        id: 0,
+        token: "".to_string(),
+        buffer: BytesMut::new().to_vec(),
+        presence: structures::BanchoPresence {
+            player_id: 0,
+            username: "".to_string(),
+            timezone: 0,
+            country_code: 0,
+            play_mode: 0,
+            permissions: 0,
+            longitude: 0.,
+            latitude: 0.,
+            player_rank: 0,
+        },
+        stats: structures::BanchoStats {
+            player_id: 0,
+            status: structures::ClientStatus {
+                status: 0,
+                status_text: "".to_string(),
+                beatmap_checksum: "".to_string(),
+                current_mods: 0,
+                play_mode: 0,
+                beatmap_id: 0,
+            },
+            ranked_score: 0,
+            total_score: 0,
+            play_count: 0,
+            accuracy: 0.,
+            rank: 0,
+            performance: 0,
+        },
     }
 }

@@ -1,4 +1,5 @@
-#[derive(Debug)]
+use serde::{Serialize, Deserialize}; 
+#[derive(Debug, Clone)]
 pub struct BanchoMessage {
     pub sending_client: String,
     pub message: String,
@@ -11,7 +12,7 @@ pub struct BanchoChannel {
     pub topic: String,
     pub connected: i16,
 }
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BanchoPresence {
     pub player_id: i32,
     pub username: String,
@@ -23,7 +24,7 @@ pub struct BanchoPresence {
     pub latitude: f32,
     pub player_rank: i32,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ClientStatus {
     pub status: u8,
     pub status_text: String,
@@ -32,7 +33,7 @@ pub struct ClientStatus {
     pub play_mode: u8,
     pub beatmap_id: i32,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BanchoStats {
     pub player_id: i32,
     pub status: ClientStatus,
