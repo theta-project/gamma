@@ -1,18 +1,20 @@
 use actix_web::web::BytesMut;
-use bancho_packet::{packets::structures};
+use bancho_packet::{buffer::serialization::Buffer, packets::structures, packets::writer::*};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::{mysql::MySqlRow, Row};
+use tracing_subscriber::registry::Data;
 
 use crate::{db::Databases, errors::InternalError};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Session {
     pub id: i32,
     pub token: String,
-    pub buffer: Vec<u8>,
     pub presence: structures::BanchoPresence,
     pub stats: structures::BanchoStats,
+    pub relax: bool,
+    pub autopilot: bool,
 }
 const COUNTRY_CODES: [&str; 252] = [
     "oc", "eu", "ad", "ae", "af", "ag", "ai", "al", "am", "an", "ao", "aq", "ar", "as", "at", "au",
@@ -86,9 +88,10 @@ pub fn build_session(user_data: MySqlRow, stats: MySqlRow, uuid: String) -> Sess
     Session {
         id,
         token: uuid,
-        buffer: BytesMut::new().to_vec(),
         presence,
         stats,
+        relax: false,
+        autopilot: false,
     }
 }
 
@@ -109,7 +112,13 @@ pub async fn find_player_from_username(username: String, data: Databases) -> Ses
             .get::<_, String>(player)
             .await
             .map_err(InternalError::Redis);
-        let session: Session = serde_json::from_str(&p.unwrap()).unwrap();
+        if (p.is_err()) {
+            break;
+        }
+        let result = p.unwrap();
+
+        let session: Session = serde_json::from_str(result.as_str()).unwrap();
+
         if session.presence.username == username {
             return session;
         }
@@ -117,7 +126,6 @@ pub async fn find_player_from_username(username: String, data: Databases) -> Ses
     Session {
         id: 0,
         token: "".to_string(),
-        buffer: BytesMut::new().to_vec(),
         presence: structures::BanchoPresence {
             player_id: 0,
             username: "".to_string(),
@@ -146,5 +154,130 @@ pub async fn find_player_from_username(username: String, data: Databases) -> Ses
             rank: 0,
             performance: 0,
         },
+        relax: false,
+        autopilot: false,
+    }
+}
+
+pub async fn all_online_status(buffer: &mut Buffer, data: Databases) {
+    let all_online = data
+        .redis()
+        .await
+        .unwrap()
+        .keys::<_, Vec<String>>("gamma::sessions::*")
+        .await
+        .map_err(InternalError::Redis);
+    if all_online.is_ok() {
+        for player in all_online.unwrap() {
+            let p = data
+                .redis()
+                .await
+                .unwrap()
+                .get::<_, String>(player)
+                .await
+                .map_err(InternalError::Redis);
+            let session: Session = serde_json::from_str(&p.unwrap()).unwrap();
+
+            bancho_user_presence(buffer, session.presence.clone());
+            bancho_handle_osu_update(buffer, session.stats.clone());
+        }
+    }
+}
+
+pub async fn announce_online(session: Session, data: Databases) {
+    let all_online = data
+        .redis()
+        .await
+        .unwrap()
+        .keys::<_, Vec<String>>("gamma::sessions::*")
+        .await
+        .map_err(InternalError::Redis);
+
+    if all_online.is_ok() {
+        let all_players = all_online.unwrap();
+        let mut b = Buffer::new();
+        bancho_user_presence(&mut b, session.clone().presence);
+        bancho_handle_osu_update(&mut b, session.clone().stats);
+
+        for player in all_players {
+            let token = player.replace("gamma::sessions::", "");
+
+            let p = data
+                .redis()
+                .await
+                .unwrap()
+                .append::<String, Vec<u8>, i32>(format!("gamma::buffers::{}", token), b.to_vec())
+                .await
+                .map_err(InternalError::Redis)
+                .unwrap();
+        }
+    }
+}
+
+pub async fn update_stats(stats: structures::BanchoStats, data: Databases) {
+    let all_online = data
+        .redis()
+        .await
+        .unwrap()
+        .keys::<_, Vec<String>>("gamma::sessions::*")
+        .await
+        .map_err(InternalError::Redis);
+
+    if all_online.is_ok() {
+        let all_players = all_online.unwrap();
+        let mut b = Buffer::new();
+        bancho_handle_osu_update(&mut b, stats);
+
+        for player in all_players {
+            let token = player.replace("gamma::sessions::", "");
+
+            let p = data
+                .redis()
+                .await
+                .unwrap()
+                .append::<String, Vec<u8>, i32>(format!("gamma::buffers::{}", token), b.to_vec())
+                .await
+                .map_err(InternalError::Redis)
+                .unwrap();
+        }
+    }
+}
+
+pub async fn send_pm(message: structures::BanchoMessage, data: Databases) {
+    let all_online = data
+        .redis()
+        .await
+        .unwrap()
+        .keys::<_, Vec<String>>("gamma::sessions::*")
+        .await
+        .map_err(InternalError::Redis);
+    if all_online.is_ok() {
+        let all_players = all_online.unwrap();
+        for player in all_players {
+            let token = player.replace("gamma::sessions::", "");
+            let p = data
+                .redis()
+                .await
+                .unwrap()
+                .get::<_, String>(player)
+                .await
+                .map_err(InternalError::Redis);
+            let session: Session = serde_json::from_str(&p.unwrap()).unwrap();
+            if session.presence.username == message.target {
+                let mut b = Buffer::new();
+                bancho_send_message(&mut b, message.clone());
+                let p = data
+                    .redis()
+                    .await
+                    .unwrap()
+                    .append::<String, Vec<u8>, i32>(
+                        format!("gamma::buffers::{}", token),
+                        b.to_vec(),
+                    )
+                    .await
+                    .map_err(InternalError::Redis)
+                    .unwrap();
+            }
+        }
     }
 }

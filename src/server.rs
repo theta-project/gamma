@@ -157,6 +157,7 @@ async fn handle_auth_req(
             let name: String = channel.get(1_usize);
             let topic: String = channel.get(2_usize);
             let autojoin: i8 = channel.get(4_usize);
+            println!("{} {}", name, topic);
             bancho_channel_available(
                 &mut buffer,
                 BanchoChannel {
@@ -180,15 +181,20 @@ async fn handle_auth_req(
         let bot_stats = &*BOT_STATS;
         bancho_user_presence(&mut buffer, bot_presence.clone());
         bancho_handle_osu_update(&mut buffer, bot_stats.clone());
+        sessions::all_online_status(&mut buffer, data.clone()).await;
+        sessions::announce_online(session.clone(), data.clone()).await;
 
         res.append_header(("cho-token", uuid.to_string()));
         let session_string = serde_json::to_string(&session).unwrap();
         data.redis()
             .await?
-            .set::<_, _, ()>(
-                format!("gamma::sessions::{}", uuid),
-                session_string,
-            )
+            .set::<_, _, ()>(format!("gamma::sessions::{}", uuid), session_string)
+            .instrument(info_span!("add_session", uuid = uuid.to_string()))
+            .await
+            .map_err(InternalError::Redis)?;
+        data.redis()
+            .await?
+            .set::<_, _, ()>(format!("gamma::buffers::{}", uuid), BytesMut::new().to_vec())
             .instrument(info_span!("add_session", uuid = uuid.to_string()))
             .await
             .map_err(InternalError::Redis)?;
@@ -213,10 +219,17 @@ async fn handle_regular_req(
         .instrument(info_span!("get_session", token = token))
         .await
         .map_err(|_| ExternalError::InvalidToken)?;
+    let buffer_redis: Vec<u8> = data
+        .redis()
+        .await?
+        .get(format!("gamma::buffers::{}", token))
+        .instrument(info_span!("get_buffer", token = token))
+        .await
+        .map_err(|_| ExternalError::InvalidToken)?;
 
     let mut session: sessions::Session = serde_json::from_str(&session_redis).unwrap();
     // get the players buffer
-    let mut player_buffer = BytesMut::from(session.buffer.as_slice());
+    let mut player_buffer = BytesMut::from(buffer_redis.as_slice());
     let binding = body.to_vec();
     let body_vec = binding.as_slice();
 
@@ -233,8 +246,9 @@ async fn handle_regular_req(
                 let status = reader::client_user_status(&mut in_buf);
                 session.stats.status = status;
                 bancho_handle_osu_update(&mut player_buffer, session.stats.clone());
+                sessions::update_stats(session.stats.clone(), data.clone()).await;
                 // TODO: maybe check if a player is already in relax mode and if they are, don't announce it
-                if session.stats.status.current_mods & 128 == 128 {
+                if (session.stats.status.current_mods & 128 == 128) && (!session.relax) {
                     bancho_announce(
                         &mut player_buffer,
                         format!(
@@ -243,7 +257,9 @@ async fn handle_regular_req(
                         )
                         .as_str(),
                     );
-                } else if session.stats.status.current_mods & 8192 == 8192 {
+                    session.relax = true;
+                } else if (session.stats.status.current_mods & 8192 == 8192) && (!session.autopilot)
+                {
                     bancho_announce(
                         &mut player_buffer,
                         format!(
@@ -252,6 +268,28 @@ async fn handle_regular_req(
                         )
                         .as_str(),
                     );
+                    session.autopilot = true;
+                } else if (session.relax) && (session.stats.status.current_mods & 128 != 128) {
+                    bancho_announce(
+                        &mut player_buffer,
+                        format!(
+                            "Relax leaderboards have now been disabled, {}",
+                            session.presence.username
+                        )
+                        .as_str(),
+                    );
+                    session.relax = false;
+                } else if (session.autopilot) && (session.stats.status.current_mods & 8192 != 8192)
+                {
+                    bancho_announce(
+                        &mut player_buffer,
+                        format!(
+                            "Autopilot leaderboards have now been disabled, {}",
+                            session.presence.username
+                        )
+                        .as_str(),
+                    );
+                    session.autopilot = false;
                 }
             }
             1 => {
@@ -270,27 +308,14 @@ async fn handle_regular_req(
                     typ = "send_message",
                     target = &message.target
                 );
-                dbg!(&message);
                 if message.target == "GammaBot" {
                 } else {
-                    let message_cloned = message.clone();
-                    let mut player =
-                        sessions::find_player_from_username(message_cloned.target, data.clone())
-                            .await;
-                    let mut player_buf = BytesMut::from(player.buffer.as_slice());
+                    let mut message_cloned = message.clone();
 
-                    message.sender_id = session.presence.player_id;
-                    message.sending_client = session.presence.username.clone();
+                    message_cloned.sender_id = session.presence.player_id;
+                    message_cloned.sending_client = session.presence.username.clone();
 
-                    bancho_send_message(&mut player_buf, message);
-                    player.buffer = player_buf.to_vec();
-                    let to_string = serde_json::to_string(&player).unwrap();
-
-                    let _ = data.redis()
-                        .await?
-                        .set::<_, _, ()>(format!("gamma::sessions::{}", player.token), to_string)
-                        .instrument(info_span!("update_session", token = token))
-                        .await;
+                    sessions::send_pm(message_cloned, data.clone()).await;
                 }
             }
             63 => {
@@ -327,6 +352,28 @@ async fn handle_regular_req(
         // report the error, but still send back the packets
         let _ = RequestError::from(InternalError::Redis(e));
     };
-
+    flush(buffer_redis, token, data.clone()).await?;
     Ok(res.body(player_buffer))
+}
+
+
+async fn flush(original_buf: Vec<u8>, token: &str, data: Databases)  -> Result<bool> {
+    let mut buffer_redis: Vec<u8> = data
+        .redis()
+        .await?
+        .get(format!("gamma::buffers::{}", token))
+        .instrument(info_span!("get_buffer", token = token))
+        .await
+        .map_err(|_| ExternalError::InvalidToken)?;
+
+    let remove_to = original_buf.len();
+    buffer_redis.drain(0..remove_to);
+
+    data.redis()
+            .await?
+            .set::<_, _, ()>(format!("gamma::buffers::{}", token), BytesMut::new().to_vec())
+            .instrument(info_span!("update_buffer", uuid = token))
+            .await
+            .map_err(InternalError::Redis)?;
+    Ok(true)
 }
