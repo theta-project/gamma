@@ -1,9 +1,9 @@
-use actix_web::web::BytesMut;
+
 use bancho_packet::{buffer::serialization::Buffer, packets::structures, packets::writer::*};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::{mysql::MySqlRow, Row};
-use tracing_subscriber::registry::Data;
+
 
 use crate::{db::Databases, errors::InternalError};
 
@@ -112,7 +112,7 @@ pub async fn find_player_from_username(username: String, data: Databases) -> Ses
             .get::<_, String>(player)
             .await
             .map_err(InternalError::Redis);
-        if (p.is_err()) {
+        if p.is_err() {
             break;
         }
         let result = p.unwrap();
@@ -197,7 +197,7 @@ pub async fn announce_online(session: Session, redis: &mut deadpool_redis::Conne
             let mut cmd = redis::cmd("RPUSH");
             cmd.arg(format!("gamma::buffers::{}", token));
 
-            for byte in b.to_vec() {
+            for &byte in b.iter() {
                 cmd.arg(byte as i32);
             }
             let _: () = cmd.query_async(redis).await.unwrap();
@@ -222,7 +222,7 @@ pub async fn update_stats(stats: structures::BanchoStats, redis: &mut deadpool_r
             let mut cmd = redis::cmd("RPUSH");
             cmd.arg(format!("gamma::buffers::{}", token));
 
-            for byte in b.to_vec() {
+            for &byte in b.iter() {
                 cmd.arg(byte as i32);
             }
             let _: () = cmd.query_async(redis).await.unwrap();
@@ -238,7 +238,7 @@ pub async fn send_pm(message: structures::BanchoMessage, redis: &mut deadpool_re
 
     if all_online.is_ok() {
         let all_players = all_online.unwrap();
-        for player in all_players {;
+        for player in all_players {
             let p = redis
                 .get::<_, String>(&player)
                 .await
@@ -253,7 +253,7 @@ pub async fn send_pm(message: structures::BanchoMessage, redis: &mut deadpool_re
                 let mut cmd = redis::cmd("RPUSH");
                 cmd.arg(format!("gamma::buffers::{}", token));
 
-                for byte in b.to_vec() {
+                for &byte in b.iter() {
                     cmd.arg(byte as i32);
                 }
                 let _: () = cmd.query_async(redis).await.unwrap();

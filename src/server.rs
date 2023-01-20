@@ -292,7 +292,7 @@ async fn handle_regular_req(
             }
             4 => (), // update last pinged... maybe should have something to destroy it on no ping for n amount of time
             25 => {
-                let mut message = reader::client_send_mesage(&mut in_buf);
+                let message = reader::client_send_mesage(&mut in_buf);
                 debug!(
                     msg = "packet received",
                     typ = "send_message",
