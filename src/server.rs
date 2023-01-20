@@ -87,6 +87,7 @@ async fn handle_auth_req(
 ) -> Result<HttpResponse> {
     let login = LoginData::from_slice(&mut body).map_err(ExternalError::MalformedPacket)?;
     let mut mysql_pool = data.mysql().await.unwrap();
+    let mut redis_pool = data.redis().await?;
 
     debug!(
         "login request for `{}` from `{:?}`",
@@ -181,20 +182,14 @@ async fn handle_auth_req(
         let bot_stats = &*BOT_STATS;
         bancho_user_presence(&mut buffer, bot_presence.clone());
         bancho_handle_osu_update(&mut buffer, bot_stats.clone());
-        sessions::all_online_status(&mut buffer, data.clone()).await;
-        sessions::announce_online(session.clone(), data.clone()).await;
+        sessions::all_online_status(&mut buffer, &mut redis_pool).await;
+        sessions::announce_online(session.clone(), &mut redis_pool).await;
 
         res.append_header(("cho-token", uuid.to_string()));
         let session_string = serde_json::to_string(&session).unwrap();
         data.redis()
             .await?
             .set::<_, _, ()>(format!("gamma::sessions::{}", uuid), session_string)
-            .instrument(info_span!("add_session", uuid = uuid.to_string()))
-            .await
-            .map_err(InternalError::Redis)?;
-        data.redis()
-            .await?
-            .set::<_, _, ()>(format!("gamma::buffers::{}", uuid), BytesMut::new().to_vec())
             .instrument(info_span!("add_session", uuid = uuid.to_string()))
             .await
             .map_err(InternalError::Redis)?;
@@ -212,20 +207,15 @@ async fn handle_regular_req(
 ) -> Result<HttpResponse> {
     let mut res = HttpResponse::Ok();
     // get session object from redis
-    let session_redis: String = data
-        .redis()
-        .await?
+    let mut redis_pool = data.redis().await?;
+
+    let session_redis: String = redis_pool
         .get(format!("gamma::sessions::{}", token))
         .instrument(info_span!("get_session", token = token))
         .await
         .map_err(|_| ExternalError::InvalidToken)?;
-    let buffer_redis: Vec<u8> = data
-        .redis()
-        .await?
-        .get(format!("gamma::buffers::{}", token))
-        .instrument(info_span!("get_buffer", token = token))
-        .await
-        .map_err(|_| ExternalError::InvalidToken)?;
+    let buffer_redis: Vec<u8> = flush_and_get(token, &mut redis_pool).await?;
+
 
     let mut session: sessions::Session = serde_json::from_str(&session_redis).unwrap();
     // get the players buffer
@@ -246,7 +236,7 @@ async fn handle_regular_req(
                 let status = reader::client_user_status(&mut in_buf);
                 session.stats.status = status;
                 bancho_handle_osu_update(&mut player_buffer, session.stats.clone());
-                sessions::update_stats(session.stats.clone(), data.clone()).await;
+                sessions::update_stats(session.stats.clone(), &mut redis_pool).await;
                 // TODO: maybe check if a player is already in relax mode and if they are, don't announce it
                 if (session.stats.status.current_mods & 128 == 128) && (!session.relax) {
                     bancho_announce(
@@ -315,7 +305,7 @@ async fn handle_regular_req(
                     message_cloned.sender_id = session.presence.player_id;
                     message_cloned.sending_client = session.presence.username.clone();
 
-                    sessions::send_pm(message_cloned, data.clone()).await;
+                    sessions::send_pm(message_cloned, &mut redis_pool).await;
                 }
             }
             63 => {
@@ -342,9 +332,7 @@ async fn handle_regular_req(
     }
     let session_string = serde_json::to_string(&session).unwrap();
     // flush the buffer
-    if let Err(e) = data
-        .redis()
-        .await?
+    if let Err(e) = redis_pool
         .set::<_, _, ()>(format!("gamma::sessions::{}", token), session_string)
         .instrument(info_span!("update_session", token = token))
         .await
@@ -352,28 +340,19 @@ async fn handle_regular_req(
         // report the error, but still send back the packets
         let _ = RequestError::from(InternalError::Redis(e));
     };
-    flush(buffer_redis, token, data.clone()).await?;
+
     Ok(res.body(player_buffer))
 }
 
-
-async fn flush(original_buf: Vec<u8>, token: &str, data: Databases)  -> Result<bool> {
-    let mut buffer_redis: Vec<u8> = data
-        .redis()
-        .await?
-        .get(format!("gamma::buffers::{}", token))
-        .instrument(info_span!("get_buffer", token = token))
+async fn flush_and_get(token: &str, redis: &mut deadpool_redis::Connection) -> Result<Vec<u8>> {
+    let out_vec = redis
+        .lpop(
+            format!("gamma::buffers::{}", token),
+            std::num::NonZeroUsize::new(9999999999),
+        )
+        .instrument(info_span!("update_buffer", uuid = token))
         .await
-        .map_err(|_| ExternalError::InvalidToken)?;
+        .map_err(InternalError::Redis)?;
 
-    let remove_to = original_buf.len();
-    buffer_redis.drain(0..remove_to);
-
-    data.redis()
-            .await?
-            .set::<_, _, ()>(format!("gamma::buffers::{}", token), BytesMut::new().to_vec())
-            .instrument(info_span!("update_buffer", uuid = token))
-            .await
-            .map_err(InternalError::Redis)?;
-    Ok(true)
+    Ok(out_vec)
 }

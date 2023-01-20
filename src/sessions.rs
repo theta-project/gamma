@@ -100,7 +100,7 @@ pub async fn find_player_from_username(username: String, data: Databases) -> Ses
         .redis()
         .await
         .unwrap()
-        .keys::<_, Vec<String>>("gamma::sessions::*")
+        .keys::<_, Vec<String>>("gamma::buffers::*")
         .await
         .map_err(InternalError::Redis);
 
@@ -159,20 +159,15 @@ pub async fn find_player_from_username(username: String, data: Databases) -> Ses
     }
 }
 
-pub async fn all_online_status(buffer: &mut Buffer, data: Databases) {
-    let all_online = data
-        .redis()
-        .await
-        .unwrap()
+pub async fn all_online_status(buffer: &mut Buffer, redis: &mut deadpool_redis::Connection) {
+    let all_online = redis
         .keys::<_, Vec<String>>("gamma::sessions::*")
         .await
         .map_err(InternalError::Redis);
+
     if all_online.is_ok() {
         for player in all_online.unwrap() {
-            let p = data
-                .redis()
-                .await
-                .unwrap()
+            let p = redis
                 .get::<_, String>(player)
                 .await
                 .map_err(InternalError::Redis);
@@ -184,11 +179,8 @@ pub async fn all_online_status(buffer: &mut Buffer, data: Databases) {
     }
 }
 
-pub async fn announce_online(session: Session, data: Databases) {
-    let all_online = data
-        .redis()
-        .await
-        .unwrap()
+pub async fn announce_online(session: Session, redis: &mut deadpool_redis::Connection) {
+    let all_online = redis
         .keys::<_, Vec<String>>("gamma::sessions::*")
         .await
         .map_err(InternalError::Redis);
@@ -202,23 +194,19 @@ pub async fn announce_online(session: Session, data: Databases) {
         for player in all_players {
             let token = player.replace("gamma::sessions::", "");
 
-            let p = data
-                .redis()
-                .await
-                .unwrap()
-                .append::<String, Vec<u8>, i32>(format!("gamma::buffers::{}", token), b.to_vec())
-                .await
-                .map_err(InternalError::Redis)
-                .unwrap();
+            let mut cmd = redis::cmd("RPUSH");
+            cmd.arg(format!("gamma::buffers::{}", token));
+
+            for byte in b.to_vec() {
+                cmd.arg(byte as i32);
+            }
+            let _: () = cmd.query_async(redis).await.unwrap();
         }
     }
 }
 
-pub async fn update_stats(stats: structures::BanchoStats, data: Databases) {
-    let all_online = data
-        .redis()
-        .await
-        .unwrap()
+pub async fn update_stats(stats: structures::BanchoStats, redis: &mut deadpool_redis::Connection) {
+    let all_online = redis
         .keys::<_, Vec<String>>("gamma::sessions::*")
         .await
         .map_err(InternalError::Redis);
@@ -231,52 +219,44 @@ pub async fn update_stats(stats: structures::BanchoStats, data: Databases) {
         for player in all_players {
             let token = player.replace("gamma::sessions::", "");
 
-            let p = data
-                .redis()
-                .await
-                .unwrap()
-                .append::<String, Vec<u8>, i32>(format!("gamma::buffers::{}", token), b.to_vec())
-                .await
-                .map_err(InternalError::Redis)
-                .unwrap();
+            let mut cmd = redis::cmd("RPUSH");
+            cmd.arg(format!("gamma::buffers::{}", token));
+
+            for byte in b.to_vec() {
+                cmd.arg(byte as i32);
+            }
+            let _: () = cmd.query_async(redis).await.unwrap();
         }
     }
 }
 
-pub async fn send_pm(message: structures::BanchoMessage, data: Databases) {
-    let all_online = data
-        .redis()
-        .await
-        .unwrap()
+pub async fn send_pm(message: structures::BanchoMessage, redis: &mut deadpool_redis::Connection) {
+    let all_online = redis
         .keys::<_, Vec<String>>("gamma::sessions::*")
         .await
         .map_err(InternalError::Redis);
+
     if all_online.is_ok() {
         let all_players = all_online.unwrap();
-        for player in all_players {
-            let token = player.replace("gamma::sessions::", "");
-            let p = data
-                .redis()
-                .await
-                .unwrap()
-                .get::<_, String>(player)
+        for player in all_players {;
+            let p = redis
+                .get::<_, String>(&player)
                 .await
                 .map_err(InternalError::Redis);
+
             let session: Session = serde_json::from_str(&p.unwrap()).unwrap();
             if session.presence.username == message.target {
+                let token = player.replace("gamma::sessions::", "");
                 let mut b = Buffer::new();
                 bancho_send_message(&mut b, message.clone());
-                let p = data
-                    .redis()
-                    .await
-                    .unwrap()
-                    .append::<String, Vec<u8>, i32>(
-                        format!("gamma::buffers::{}", token),
-                        b.to_vec(),
-                    )
-                    .await
-                    .map_err(InternalError::Redis)
-                    .unwrap();
+
+                let mut cmd = redis::cmd("RPUSH");
+                cmd.arg(format!("gamma::buffers::{}", token));
+
+                for byte in b.to_vec() {
+                    cmd.arg(byte as i32);
+                }
+                let _: () = cmd.query_async(redis).await.unwrap();
             }
         }
     }

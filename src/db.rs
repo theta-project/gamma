@@ -54,7 +54,7 @@ impl Databases {
 
     /// Get a redis connection
     #[instrument(level = Level::DEBUG, name = "get_redis_conn", skip_all)]
-    pub async fn redis(&self) -> Result<impl AsyncCommands, RequestError> {
+    pub async fn redis(&self) -> Result<deadpool_redis::Connection, RequestError> {
         self.redis
             .get()
             .await
